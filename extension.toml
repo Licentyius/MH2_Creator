@@ -1,0 +1,13 @@
+[extension]
+id = "mh2_creator"
+name = "MH2 Creator Sync"
+version = "1.0.0"
+author = "Elvaerwyn_MH2"
+description = "Directly shares and uploads asset bundles to the community repository."
+
+[runtime]
+package_dirs = ["."]
+sys_paths = ["."]
+
+[project.entry-points]
+"makehuman2.extension" = "mh2_official_tools.mh2_creator.mh2_creator:initialize_extension"
