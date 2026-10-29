@@ -1,5 +1,5 @@
 """
-MakeHuman 2 Creator Suite Extension V1.2 by Elvaerwyn_MH2 2026
+MakeHuman 2 Creator Suite Extension V1.3 by Elvaerwyn_MH2 2026
 Uploads creations securely via authentic background headless browser sessions
 elimination of drupal dependencies as per October 2026 legacy changes
 """
@@ -105,9 +105,7 @@ class MH2CreatorPortalPanel:
         
         # Public OAuth App client registered strictly for the MakeHuman 2 community portal gateway
         client_id = "Ov23ctXp8V6w5zGZ6w7V"
-        
-        # FIXED STREAM ROUTING: Concatenated to ensure the network query targets 
-        # the true API cloud engine while bypassing hidden system layout filters
+
         api_subdomain = "https://api." + "github" + ".com"
         endpoint_path = "/login/device/code"
         url = f"{api_subdomain}{endpoint_path}"
@@ -195,7 +193,7 @@ class MH2CreatorPortalPanel:
             self.pass_input.setPlaceholderText("Repository Security Token Key")
             self.pass_input.setEchoMode(QLineEdit.Password)
 
-            self.btn_token_help = QPushButton("🔑 Generate Token Help Key")
+            self.btn_token_help = QPushButton("🔑 Generate Token Upload Key")
             self.btn_token_help.setStyleSheet("color: #D0D0D0; font-size: 11px; font-style: italic; background-color: #2F2F2F; border: 1px solid #444444; border-radius: 3px; padding: 4px;")
             self.btn_token_help.clicked.connect(lambda: parent.handle_token_generation_shortcut())
             
@@ -230,7 +228,7 @@ class MH2CreatorPortalPanel:
             
             path_row.addWidget(self.path_input)
             path_row.addWidget(self.browse_btn)
-            path_row.addWidget(self.refresh_btn)  # Injected directly to row layout matrix
+            path_row.addWidget(self.refresh_btn)  
             folder_layout.addLayout(path_row)
             
             folder_layout.addWidget(QLabel("Target Directory Sub-Component Files:"))
@@ -290,7 +288,11 @@ class MH2CreatorPortalPanel:
 
 
     def _api_request(self, endpoint, data=None, method="GET"):
-        url = f"{self.base_url}/repos/{self.repo_slug}/{endpoint}"
+
+        url = f"https://api.github.com/repos/{self.repo_slug}/{endpoint}"
+
+        print(f"[MH2 API DEBUG] URL: {url} | Method: {method}")
+
         encoded_data = json.dumps(data).encode('utf-8') if data else None
         
         request_headers = {
@@ -510,8 +512,15 @@ class MH2CreatorPortalPanel:
                 self.panel.upload_btn.setText("Submit to Moderation Queue")
                 self.panel.upload_btn.setEnabled(True)
                 return
-            main_ref = self._api_request("git/ref/heads/main")
-            main_sha = main_ref["object"]["sha"]
+ 
+            main_ref = self._api_request("git/refs/heads/main")
+
+            # Handle if the response comes as a list or direct dict safely
+            if isinstance(main_ref, list):
+                main_sha = main_ref[0]["object"]["sha"]
+            else:
+                main_sha = main_ref["object"]["sha"]
+                
             issue_payload = {
                 "title": form_payload["title"],
                 "body": (
@@ -557,6 +566,7 @@ class MH2CreatorPortalPanel:
             QMessageBox.critical(self.panel, "Transaction Failed", f"GitHub operational error: {str(e)}")
         self.panel.upload_btn.setText("Submit to Moderation Queue")
         self.panel.upload_btn.setEnabled(True)
+
 
     def shutdown(self):
         if self.panel:
