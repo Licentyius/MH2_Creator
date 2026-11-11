@@ -1,5 +1,5 @@
 """
-MakeHuman 2 Creator Suite Extension V1.6 by Elvaerwyn_MH2 2026
+MakeHuman 2 Creator Suite Extension V1.7 by Elvaerwyn_MH2 2026
 Uploads creations securely via authentic background headless browser sessions
 elimination of drupal dependencies as per October 2026 legacy changes
 """
@@ -439,7 +439,7 @@ class MH2CreatorPortalPanel:
         self.refresh_local_file_index(folder)
 
     def validate_asset_bundle(self, folder_path):
-        assets_found = {"primary": None, "geometry": None, "material": None, "textures": [], "thumbnail": None}
+        assets_found = {"primary": None, "geometry": None, "material": None, "textures": [], "thumbnail": None, "zip": None}
         if not folder_path or not os.path.exists(folder_path) or not os.path.isdir(folder_path):
             return assets_found
         try:
@@ -450,13 +450,14 @@ class MH2CreatorPortalPanel:
                 _, ext_raw = os.path.splitext(file)
                 ext = ext_raw.lower()
                 file_name_lower = file.lower()
-                if ext in [".mhclo", ".target", ".proxy"]:
+                if ext == ".zip":
+                    assets_found["zip"] = full_path
+                elif ext in [".mhclo", ".target", ".proxy"]:
                     assets_found["primary"] = full_path
                 elif ext in [".obj", ".mhbin"]:
                     assets_found["geometry"] = full_path
                 elif ext in [".mhmat", ".mat"]:
                     assets_found["material"] = full_path
-
                 elif ext in [".png", ".jpg", ".jpeg", ".thumb", ".bmp"]:
                     if "thumb" in file_name_lower or "preview" in file_name_lower or ext == ".thumb":
                         assets_found["thumbnail"] = full_path
@@ -544,10 +545,11 @@ class MH2CreatorPortalPanel:
                 pass
 
         # CRITICAL REJECTION BARRIERS
-        if not bundle["primary"]:
-            rejection_errors.append("- Missing primary definition file (.mhclo, .target, or .proxy).")
-        if bundle["primary"] and bundle["primary"].endswith(".mhclo") and not bundle["geometry"]:
-            rejection_errors.append("- Clothing configuration missing accompanying geometry model (.obj or .mhbin).")
+        if not bundle["zip"]:
+            if not bundle["primary"]:
+                rejection_errors.append("- Missing primary definition file (.mhclo, .target, .proxy, or .zip).")
+            if bundle["primary"] and bundle["primary"].endswith(".mhclo") and not bundle["geometry"]:
+                rejection_errors.append("- Clothing configuration missing accompanying geometry model (.obj or .mhbin).")
         if not bundle["thumbnail"]:
             rejection_errors.append("- Missing mandatory preview showcase image file containing 'thumb' or 'preview'.")
 
@@ -624,9 +626,9 @@ class MH2CreatorPortalPanel:
         
         try:
             bundle = self.validate_asset_bundle(form_payload["folder"])
-            if not bundle["primary"]:
+            if not bundle["primary"] and not bundle["zip"]:
                 QApplication.restoreOverrideCursor()
-                QMessageBox.critical(self.panel, "Validation Error", "No core asset data file identified or asset folder structure is incomplete/corrupted.")
+                QMessageBox.critical(self.panel, "Validation Error", "No core asset data file or .zip archive identified in staging folder.")
                 self.panel.upload_btn.setText("Submit to Moderation Queue")
                 self.panel.upload_btn.setEnabled(True)
                 return
@@ -675,7 +677,7 @@ class MH2CreatorPortalPanel:
             self._api_request("git/refs", data=branch_payload, method="POST")
             
             # Pack the dynamic fragment file seamlessly alongside definitions, geometry, and textures
-            files_to_upload = [bundle["primary"], bundle["geometry"], bundle["material"], bundle["thumbnail"], local_json_inspect_path] + bundle["textures"]
+            files_to_upload = [bundle["zip"], bundle["primary"], bundle["geometry"], bundle["material"], bundle["thumbnail"], local_json_inspect_path] + bundle["textures"]
             for f_path in files_to_upload:
                 if not f_path or not os.path.exists(f_path):
                     continue
