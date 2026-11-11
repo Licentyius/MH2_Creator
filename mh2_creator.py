@@ -452,10 +452,11 @@ class MH2CreatorPortalPanel:
                 file_name_lower = file.lower()
                 if ext in [".mhclo", ".target", ".proxy"]:
                     assets_found["primary"] = full_path
-                elif ext == ".obj":
+                elif ext in [".obj", ".mhbin"]:
                     assets_found["geometry"] = full_path
                 elif ext in [".mhmat", ".mat"]:
                     assets_found["material"] = full_path
+
                 elif ext in [".png", ".jpg", ".jpeg", ".thumb", ".bmp"]:
                     if "thumb" in file_name_lower or "preview" in file_name_lower or ext == ".thumb":
                         assets_found["thumbnail"] = full_path
@@ -546,7 +547,7 @@ class MH2CreatorPortalPanel:
         if not bundle["primary"]:
             rejection_errors.append("- Missing primary definition file (.mhclo, .target, or .proxy).")
         if bundle["primary"] and bundle["primary"].endswith(".mhclo") and not bundle["geometry"]:
-            rejection_errors.append("- Clothing configuration missing accompanying geometry model (.obj).")
+            rejection_errors.append("- Clothing configuration missing accompanying geometry model (.obj or .mhbin).")
         if not bundle["thumbnail"]:
             rejection_errors.append("- Missing mandatory preview showcase image file containing 'thumb' or 'preview'.")
 
@@ -569,7 +570,7 @@ class MH2CreatorPortalPanel:
                 "base": selected_base_mesh,
                 "type": system_type_slug,  
                 "license": system_license_slug,
-                "thumb": f"https://github.com{self.repo_slug}/blob/main/Resource/{os.path.basename(bundle['thumbnail'])}" if bundle["thumbnail"] else "*"
+                "thumb": f"https://github.com/{self.repo_slug}/blob/main/Resource/{os.path.basename(bundle['thumbnail'])}" if bundle["thumbnail"] else "*"
             }
             
             preview_text = "✅ VALIDATION PASS - LIVE MANIFEST PREVIEW:\n"
@@ -643,7 +644,7 @@ class MH2CreatorPortalPanel:
                 "base": form_payload["base"],
                 "type": form_payload["type"],  
                 "license": form_payload["license_slug"],
-                "thumb": f"https://github.com{self.repo_slug}/blob/main/Resource/{os.path.basename(bundle['thumbnail'])}" if bundle["thumbnail"] else "*"
+                "thumb": f"https://github.com/{self.repo_slug}/blob/main/Resource/{os.path.basename(bundle['thumbnail'])}" if bundle["thumbnail"] else "*"
             }
 
             # Generate the local pack_manifest.json file flat inside your creator folder tree
