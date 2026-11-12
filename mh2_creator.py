@@ -1,5 +1,5 @@
 """
-MakeHuman 2 Creator Suite Extension V1.7 by Elvaerwyn_MH2 2026
+MakeHuman 2 Creator Suite Extension V1.8 by Elvaerwyn_MH2 2026
 Uploads creations securely via authentic background headless browser sessions
 elimination of drupal dependencies as per October 2026 legacy changes
 """
@@ -315,10 +315,10 @@ class MH2CreatorPortalPanel:
             self.base_dropdown.currentIndexChanged.connect(trigger_refresh)
             self.license_dropdown.currentIndexChanged.connect(trigger_refresh)
 
-
-    def _api_request(self, endpoint, data=None, method="GET"):
-
-        url = f"https://api.github.com/repos/{self.repo_slug}/{endpoint}"
+    def _api_request(self, endpoint, data=None, method="GET", repo_slug=None):
+        target_repo = repo_slug if repo_slug else self.repo_slug
+        api_base = "https://api." + "github" + ".com/repos/"
+        url = f"{api_base}{target_repo}/{endpoint}" if endpoint else f"{api_base}{target_repo}"
 
         print(f"[MH2 API DEBUG] URL: {url} | Method: {method}")
 
@@ -326,7 +326,7 @@ class MH2CreatorPortalPanel:
         
         request_headers = {
             "Authorization": f"token {self.token}",
-            "Accept": "application/json",  # Standard JSON data stream compliance tag
+            "Accept": "application/json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": self.user_agent
         }
@@ -625,6 +625,8 @@ class MH2CreatorPortalPanel:
         QApplication.processEvents()
         
         try:
+            import time
+
             bundle = self.validate_asset_bundle(form_payload["folder"])
             if not bundle["primary"] and not bundle["zip"]:
                 QApplication.restoreOverrideCursor()
@@ -634,11 +636,14 @@ class MH2CreatorPortalPanel:
                 return
  
             main_ref = self._api_request("git/refs/heads/main")
-
             if isinstance(main_ref, list):
                 main_sha = main_ref[0]["object"]["sha"]
             else:
                 main_sha = main_ref["object"]["sha"]
+
+            # Detect whether the logged-in user has direct write access to the main repo
+            repo_info = self._api_request("")
+            has_direct_write = repo_info.get("permissions", {}).get("push", False)
                 
             # Build clean metadata JSON configuration layout for the online repository manifest logs
             manifest_metadata_payload = {
@@ -653,43 +658,102 @@ class MH2CreatorPortalPanel:
             local_json_inspect_path = os.path.normpath(os.path.join(form_payload["folder"], "pack_manifest.json"))
             with open(local_json_inspect_path, "w", encoding="utf-8") as json_file:
                 json.dump(manifest_metadata_payload, json_file, indent=4)
-                
-            issue_payload = {
-                "title": f"[ASSET SUBMISSION] {form_payload['title']}",
-                "body": (
-                    f"### Asset Evaluation Request\n\n"
-                    f"Asset Title Name: **{form_payload['title']}**\n"
-                    f"Created By Artist: {form_payload['artist']} 👩‍🎨\n"
-                    f"Category: `{form_payload['category']}` (System Type: `{form_payload['type']}`)\n"
-                    f"Target Mesh Base: `{form_payload['base']}`\n"
-                    f"License: `{form_payload['license']}`\n\n"
-                    f"**Description / Credits / Tags:**\n{form_payload['description']}\n\n"
-                    f"**Generated Manifest Metadata Log Alignment:**\n"
-                    f"```json\n{json.dumps(manifest_metadata_payload, indent=4)}\n```"
-                )
-            }
-            
-            issue_res = self._api_request("issues", data=issue_payload, method="POST")
-            issue_num = issue_res["number"]
-            staging_branch_name = f"staging-{issue_num}"
-            
-            branch_payload = {"ref": f"refs/heads/{staging_branch_name}", "sha": main_sha}
-            self._api_request("git/refs", data=branch_payload, method="POST")
-            
-            # Pack the dynamic fragment file seamlessly alongside definitions, geometry, and textures
+
             files_to_upload = [bundle["zip"], bundle["primary"], bundle["geometry"], bundle["material"], bundle["thumbnail"], local_json_inspect_path] + bundle["textures"]
-            for f_path in files_to_upload:
-                if not f_path or not os.path.exists(f_path):
-                    continue
-                with open(f_path, "rb") as f_bytes:
-                    b64_content = base64.b64encode(f_bytes.read()).decode('utf-8')
-                rel_path = os.path.basename(f_path)
-                commit_payload = {
-                    "message": f"Staging asset component from creator @{form_payload['artist']}: {rel_path}",
-                    "content": b64_content,
-                    "branch": staging_branch_name
+
+            if has_direct_write:
+                # =========================================================
+                # PATH A: DIRECT BRANCH + ISSUE (For You & Repo Admins)
+                # =========================================================
+                issue_payload = {
+                    "title": f"[ASSET SUBMISSION] {form_payload['title']}",
+                    "body": (
+                        f"### Asset Evaluation Request\n\n"
+                        f"Asset Title Name: **{form_payload['title']}**\n"
+                        f"Created By Artist: {form_payload['artist']} 👩‍🎨\n"
+                        f"Category: `{form_payload['category']}` (System Type: `{form_payload['type']}`)\n"
+                        f"Target Mesh Base: `{form_payload['base']}`\n"
+                        f"License: `{form_payload['license']}`\n\n"
+                        f"**Description / Credits / Tags:**\n{form_payload['description']}\n\n"
+                        f"**Generated Manifest Metadata Log Alignment:**\n"
+                        f"```json\n{json.dumps(manifest_metadata_payload, indent=4)}\n```"
+                    )
                 }
-                self._api_request(f"contents/{rel_path}", data=commit_payload, method="PUT")
+                issue_res = self._api_request("issues", data=issue_payload, method="POST")
+                submission_id = f"Issue #{issue_res['number']}"
+                staging_branch_name = f"staging-{issue_res['number']}"
+                
+                branch_payload = {"ref": f"refs/heads/{staging_branch_name}", "sha": main_sha}
+                self._api_request("git/refs", data=branch_payload, method="POST")
+                
+                for f_path in files_to_upload:
+                    if not f_path or not os.path.exists(f_path):
+                        continue
+                    with open(f_path, "rb") as f_bytes:
+                        b64_content = base64.b64encode(f_bytes.read()).decode('utf-8')
+                    rel_path = os.path.basename(f_path)
+                    commit_payload = {
+                        "message": f"Staging asset component from creator @{form_payload['artist']}: {rel_path}",
+                        "content": b64_content,
+                        "branch": staging_branch_name
+                    }
+                    self._api_request(f"contents/{rel_path}", data=commit_payload, method="PUT")
+
+            else:
+                # =========================================================
+                # PATH B: FORK + PULL REQUEST (For Partner & Community)
+                # =========================================================
+                fork_res = self._api_request("forks", data={}, method="POST")
+                fork_owner = fork_res["owner"]["login"]
+                fork_slug = fork_res["full_name"]
+
+                fork_main_sha = None
+                for _ in range(6):
+                    try:
+                        fork_ref = self._api_request("git/refs/heads/main", repo_slug=fork_slug)
+                        fork_main_sha = fork_ref["object"]["sha"] if isinstance(fork_ref, list) else fork_ref["object"]["sha"]
+                        break
+                    except Exception:
+                        time.sleep(2)
+
+                if not fork_main_sha:
+                    fork_main_sha = main_sha
+
+                staging_branch_name = f"staging-{int(time.time())}"
+                branch_payload = {"ref": f"refs/heads/{staging_branch_name}", "sha": fork_main_sha}
+                self._api_request("git/refs", data=branch_payload, method="POST", repo_slug=fork_slug)
+
+                for f_path in files_to_upload:
+                    if not f_path or not os.path.exists(f_path):
+                        continue
+                    with open(f_path, "rb") as f_bytes:
+                        b64_content = base64.b64encode(f_bytes.read()).decode('utf-8')
+                    rel_path = os.path.basename(f_path)
+                    commit_payload = {
+                        "message": f"Staging asset component from creator @{form_payload['artist']}: {rel_path}",
+                        "content": b64_content,
+                        "branch": staging_branch_name
+                    }
+                    self._api_request(f"contents/{rel_path}", data=commit_payload, method="PUT", repo_slug=fork_slug)
+
+                pr_payload = {
+                    "title": f"[ASSET SUBMISSION] {form_payload['title']}",
+                    "head": f"{fork_owner}:{staging_branch_name}",
+                    "base": "main",
+                    "body": (
+                        f"### Asset Evaluation Request\n\n"
+                        f"Asset Title Name: **{form_payload['title']}**\n"
+                        f"Created By Artist: {form_payload['artist']} 👩‍🎨\n"
+                        f"Category: `{form_payload['category']}` (System Type: `{form_payload['type']}`)\n"
+                        f"Target Mesh Base: `{form_payload['base']}`\n"
+                        f"License: `{form_payload['license']}`\n\n"
+                        f"**Description / Credits / Tags:**\n{form_payload['description']}\n\n"
+                        f"**Generated Manifest Metadata Log Alignment:**\n"
+                        f"```json\n{json.dumps(manifest_metadata_payload, indent=4)}\n```"
+                    )
+                }
+                pr_res = self._api_request("pulls", data=pr_payload, method="POST")
+                submission_id = f"Pull Request #{pr_res['number']}"
                 
             QApplication.restoreOverrideCursor()
             try:
@@ -699,7 +763,7 @@ class MH2CreatorPortalPanel:
             except Exception:
                 pass
                 
-            QMessageBox.information(self.panel, "Staging Complete!", f"Asset locked successfully. Assigned Evaluation Issue ID: #{issue_num}\n\nManifest structure synchronized completely!")
+            QMessageBox.information(self.panel, "Staging Complete!", f"Asset locked successfully. Assigned {submission_id}\n\nManifest structure synchronized completely!")
             self.panel.title_input.clear()
             self.panel.desc_input.clear()
             self.refresh_local_file_index(self.panel.path_input.text())
@@ -709,6 +773,7 @@ class MH2CreatorPortalPanel:
             
         self.panel.upload_btn.setText("Submit to Moderation Queue")
         self.panel.upload_btn.setEnabled(True)
+
 
     def shutdown(self):
         if self.panel:
