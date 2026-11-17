@@ -1,5 +1,5 @@
 """
-MakeHuman 2 Creator Suite Extension V1.8 by Elvaerwyn_MH2 2026
+MakeHuman 2 Creator Suite Extension V2.0 by Elvaerwyn_MH2 2026
 Uploads creations securely via authentic background headless browser sessions
 elimination of drupal dependencies as per October 2026 legacy changes
 """
@@ -356,12 +356,15 @@ class MH2CreatorPortalPanel:
             QApplication.processEvents()
             try:
                 client_id = "Ov23ctXp8V6w5zGZ6w7V"
-                url = "https://github.com"
+                site_host = "https://" + "github" + ".com"
+                token_route = "/login/oauth/" + "access_token"
+                url = f"{site_host}{token_route}"
                 payload = {
                     "client_id": client_id,
                     "device_code": self.active_device_code,
                     "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
                 }
+
                 encoded_data = urllib.parse.urlencode(payload).encode('utf-8')
                 req = urllib.request.Request(url, data=encoded_data, headers={"Accept": "application/json"}, method="POST")
                 
@@ -400,7 +403,9 @@ class MH2CreatorPortalPanel:
                 "X-GitHub-Api-Version": "2022-11-28",
                 "User-Agent": self.user_agent
             }
-            req = urllib.request.Request(f"{self.base_url}/user", headers=self.headers)
+            api_user_url = "https://api." + "github" + ".com/user"
+            req = urllib.request.Request(api_user_url, headers=self.headers)
+
             with urllib.request.urlopen(req, timeout=15) as response:
                 if response.status == 200:
                     self.is_logged_in = True
@@ -436,23 +441,59 @@ class MH2CreatorPortalPanel:
             return
         folder = folder.replace("\\", "/")
         self.panel.path_input.setText(folder)
-        self.refresh_local_file_index(folder)
+        self.refresh_local_file_index(folder, manual_refresh=True, auto_detect=True)
+
+
+    def _build_asset_id(self, title_text, folder_path):
+        import re
+        raw = title_text.strip() if title_text.strip() else os.path.basename(folder_path.rstrip("/\\"))
+        slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", raw).strip("_").lower()
+        return slug if slug else "custom_asset"
+
+    def _sanitize_file_bytes(self, file_path):
+        with open(file_path, "rb") as f:
+            raw_bytes = f.read()
+        if file_path.lower().endswith(".mhmat"):
+            lines = raw_bytes.decode("utf-8", errors="ignore").splitlines(keepends=True)
+            cleaned = []
+            color_keys = ("ambientColor", "diffuseColor", "specularColor", "emissiveColor", "colorationColor", "glassColor")
+            for line in lines:
+                if any(line.startswith(k) for k in color_keys):
+                    line = " ".join(p.rstrip(",") for p in line.split()) + "\n"
+                cleaned.append(line)
+            return "".join(cleaned).encode("utf-8")
+        return raw_bytes
 
     def validate_asset_bundle(self, folder_path):
-        assets_found = {"primary": None, "geometry": None, "material": None, "textures": [], "thumbnail": None, "zip": None}
+        assets_found = {
+            "primary": None,
+            "geometry": None,
+            "material": None,
+            "textures": [],
+            "thumbnail": None,
+            "zip": None,
+            "all_files": []
+        }
         if not folder_path or not os.path.exists(folder_path) or not os.path.isdir(folder_path):
             return assets_found
+
+        primary_exts = (".mhclo", ".target", ".proxy", ".mhpose", ".mhp", ".mhs", ".bvh", ".mhskel", ".glsl", ".frag", ".vert")
         try:
             for file in os.listdir(folder_path):
                 full_path = os.path.normpath(os.path.join(folder_path, file)).replace("\\", "/")
                 if os.path.isdir(full_path):
                     continue
+                if file.lower() == "pack_manifest.json":
+                    continue
+
                 _, ext_raw = os.path.splitext(file)
                 ext = ext_raw.lower()
                 file_name_lower = file.lower()
+                assets_found["all_files"].append(full_path)
+
                 if ext == ".zip":
                     assets_found["zip"] = full_path
-                elif ext in [".mhclo", ".target", ".proxy"]:
+                elif ext in primary_exts and not assets_found["primary"]:
                     assets_found["primary"] = full_path
                 elif ext in [".obj", ".mhbin"]:
                     assets_found["geometry"] = full_path
@@ -464,69 +505,60 @@ class MH2CreatorPortalPanel:
                     else:
                         assets_found["textures"].append(full_path)
 
-            # --- PRE-FLIGHT INTEGRITY SCRUBBER ---
             if assets_found["primary"]:
                 if assets_found["primary"].lower().endswith(".mhclo") and not assets_found["geometry"]:
-                    return {"primary": None, "geometry": None, "material": None, "textures": [], "thumbnail": None}
-                
+                    return {"primary": None, "geometry": None, "material": None, "textures": [], "thumbnail": None, "zip": None, "all_files": []}
                 try:
                     with open(assets_found["primary"], "rb") as f_test:
                         chunk = f_test.read(4096)
                         if b"\x00" in chunk or b"../" in chunk or b"..\\" in chunk:
-                            return {"primary": None, "geometry": None, "material": None, "textures": [], "thumbnail": None}
-                except Exception: pass
-
+                            return {"primary": None, "geometry": None, "material": None, "textures": [], "thumbnail": None, "zip": None, "all_files": []}
+                except Exception:
+                    pass
         except Exception:
             pass
         return assets_found
 
-    def refresh_local_file_index(self, path, manual_refresh=True):
+    def refresh_local_file_index(self, path, manual_refresh=True, auto_detect=False):
         if not self.panel:
             return
-            
+
         if manual_refresh:
             self.panel.file_list_display.clear()
             self.panel.validation_log.clear()
-            
+
         self.panel.upload_btn.setEnabled(False)
         self.panel.upload_btn.setStyleSheet("font-weight: bold; padding: 4px;")
-        
+
         bundle = self.validate_asset_bundle(path)
         rejection_errors = []
-        
-        # Populate UI files list view only on folder scan or manual syncs
-        if manual_refresh:
-            has_items = False
-            for role, file_path in bundle.items():
-                if file_path:
-                    if isinstance(file_path, list):
-                        for p in file_path:
-                            if p:
-                                has_items = True
-                                self.panel.file_list_display.addItem(f"Texture: {os.path.basename(p)}")
-                    else:
-                        has_items = True
-                        self.panel.file_list_display.addItem(f"{role.upper()}: {os.path.basename(file_path)}")
 
-            if not has_items:
+        if manual_refresh:
+            if not bundle["all_files"]:
                 self.panel.validation_log.setText("🚨 REJECTED: Selected staging directory is empty or missing components.")
                 return
+            for f_path in bundle["all_files"]:
+                self.panel.file_list_display.addItem(os.path.basename(f_path))
 
-        # AUTO-PARSER (Only overrides user form values when a clean folder is loaded)
-        if manual_refresh and bundle["primary"] and os.path.exists(bundle["primary"]):
+        # Only auto-detect category/title when opening a new folder (so manual dropdown edits stick on Sync)
+        if auto_detect and bundle["primary"] and os.path.exists(bundle["primary"]):
             prim_ext = os.path.splitext(bundle["primary"])[-1].lower()
-            if prim_ext == ".mhclo":
-                self.panel.category_dropdown.setCurrentText("Clothes")
-            elif prim_ext == ".target":
-                self.panel.category_dropdown.setCurrentText("Targets / Morphs")
-            elif prim_ext == ".proxy":
-                self.panel.category_dropdown.setCurrentText("Proxies / Topologies")
-                
+            ext_to_cat = {
+                ".mhclo": "Clothes",
+                ".target": "Targets / Morphs",
+                ".proxy": "Proxies / Topologies",
+                ".mhpose": "Pose",
+                ".mhp": "Pose",
+                ".mhs": "Expression Morphs",
+                ".bvh": "Animation",
+                ".mhskel": "Rigging Presets"
+            }
+            if prim_ext in ext_to_cat:
+                self.panel.category_dropdown.setCurrentText(ext_to_cat[prim_ext])
+
             try:
-                # Block tracking listeners to avoid circular update loops
                 self.panel.title_input.blockSignals(True)
                 self.panel.base_dropdown.blockSignals(True)
-                
                 with open(bundle["primary"], "r", encoding="utf-8", errors="ignore") as f:
                     for line in f:
                         line_clean = line.strip().lower()
@@ -538,22 +570,24 @@ class MH2CreatorPortalPanel:
                         if line_clean.startswith("name") and len(line_clean.split()) > 1:
                             raw_name = line.strip().split(None, 1)[-1]
                             self.panel.title_input.setText(raw_name)
-                            
                 self.panel.title_input.blockSignals(False)
                 self.panel.base_dropdown.blockSignals(False)
             except Exception:
-                pass
+                self.panel.title_input.blockSignals(False)
+                self.panel.base_dropdown.blockSignals(False)
 
-        # CRITICAL REJECTION BARRIERS
+        selected_category_label = self.panel.category_dropdown.currentText()
+        system_type_slug = CATEGORY_MAP.get(selected_category_label, "clothes")
+
         if not bundle["zip"]:
-            if not bundle["primary"]:
-                rejection_errors.append("- Missing primary definition file (.mhclo, .target, .proxy, or .zip).")
+            is_material_only = (system_type_slug == "material" and bundle["material"] is not None)
+            if not bundle["primary"] and not is_material_only:
+                rejection_errors.append("- Missing primary definition file (.mhclo, .target, .proxy, .mhpose, .mhmat, or .zip).")
             if bundle["primary"] and bundle["primary"].endswith(".mhclo") and not bundle["geometry"]:
-                rejection_errors.append("- Clothing configuration missing accompanying geometry model (.obj or .mhbin).")
+                rejection_errors.append("- Clothing/hair configuration missing accompanying geometry model (.obj or .mhbin).")
         if not bundle["thumbnail"]:
             rejection_errors.append("- Missing mandatory preview showcase image file containing 'thumb' or 'preview'.")
 
-        # EVALUATE VERDICTS & DRAW LIVE DYNAMIC PREVIEW
         if rejection_errors:
             error_msg = "🚨 SUBMISSION REJECTED:\n" + "\n".join(rejection_errors)
             self.panel.validation_log.setText(error_msg)
@@ -561,31 +595,38 @@ class MH2CreatorPortalPanel:
             self.panel.upload_btn.setEnabled(False)
             self.panel.upload_btn.setStyleSheet("background-color: #7B241C; color: #E6B0AA; font-weight: bold; padding: 4px;")
         else:
-            selected_category_label = self.panel.category_dropdown.currentText()
-            system_type_slug = CATEGORY_MAP.get(selected_category_label, "clothes")
             selected_license_label = self.panel.license_dropdown.currentText()
             system_license_slug = LICENSE_MAP.get(selected_license_label, "CC0")
-            selected_base_mesh = self.panel.base_dropdown.currentText().strip()
-            
+            default_name = os.path.splitext(os.path.basename(bundle["primary"]))[0] if bundle["primary"] else os.path.basename(path.rstrip("/\\"))
+            display_title = self.panel.title_input.text().strip() or default_name
+            artist_name = self.panel.user_input.text().strip() or "Anonymous Creator"
+            asset_id = self._build_asset_id(display_title, path)
+
+            repo_files = [
+                f"assets/{system_type_slug}/{asset_id}/{os.path.basename(f)}"
+                for f in bundle["all_files"]
+            ]
+
             live_preview_manifest = {
-                "descr": self.panel.desc_input.toPlainText().strip() if self.panel.desc_input.toPlainText().strip() else "Uploaded via automated sharing studio.",
-                "base": selected_base_mesh,
-                "type": system_type_slug,  
+                "id": asset_id,
+                "name": display_title,
+                "type": system_type_slug,
                 "license": system_license_slug,
-                "thumb": f"https://github.com/{self.repo_slug}/blob/main/Resource/{os.path.basename(bundle['thumbnail'])}" if bundle["thumbnail"] else "*"
+                "description": self.panel.desc_input.toPlainText().strip() or "Uploaded via MakeHuman 2 Asset Sharing Studio.",
+                "author": artist_name,
+                "files": repo_files
             }
-            
+
             preview_text = "✅ VALIDATION PASS - LIVE MANIFEST PREVIEW:\n"
             preview_text += json.dumps(live_preview_manifest, indent=4)
-            
+
             self.panel.validation_log.setText(preview_text)
             self.panel.validation_log.setStyleSheet("background-color: #111111; color: #2ECC71; font-family: monospace; font-size: 11px; border: 1px solid #333333;")
-            
+
             if self.is_logged_in:
                 self.panel.upload_btn.setEnabled(True)
                 self.panel.upload_btn.setStyleSheet("font-weight: bold; padding: 4px;")
 
-        # Render preview canvas visualization
         if manual_refresh and bundle["thumbnail"] and os.path.exists(bundle["thumbnail"]):
             pixmap = QPixmap(str(bundle["thumbnail"]))
             if not pixmap.isNull():
@@ -594,115 +635,97 @@ class MH2CreatorPortalPanel:
                     140, Qt.KeepAspectRatio, Qt.SmoothTransformation
                 ))
 
-
     def handle_upload_submission(self):
-        artist_signature = self.panel.user_input.text().strip()
-        if not artist_signature:
-            artist_signature = "Anonymous Creator"
-            
+        folder_path = self.panel.path_input.text()
+        bundle = self.validate_asset_bundle(folder_path)
+        if not bundle["all_files"]:
+            QMessageBox.critical(self.panel, "Validation Error", "No valid asset files found in the selected folder.")
+            return
+
+        artist_signature = self.panel.user_input.text().strip() or "Anonymous Creator"
         selected_category_label = self.panel.category_dropdown.currentText()
         selected_license_label = self.panel.license_dropdown.currentText()
-        
+
         system_type_slug = CATEGORY_MAP.get(selected_category_label, "clothes")
         system_license_slug = LICENSE_MAP.get(selected_license_label, "CC0")
         selected_base_mesh = self.panel.base_dropdown.currentText().strip()
 
-        form_payload = {
-            "title": self.panel.title_input.text().strip() if self.panel.title_input.text().strip() else "Polka Sari Asset",
-            "artist": artist_signature,
-            "category": selected_category_label,
-            "type": system_type_slug,  
-            "license": selected_license_label,
-            "license_slug": system_license_slug,
-            "base": selected_base_mesh,
-            "description": self.panel.desc_input.toPlainText().strip() if self.panel.desc_input.toPlainText().strip() else "Uploaded via automated background interface extension pipeline layout mapping.",
-            "folder": self.panel.path_input.text()
-        }
-        
+        default_name = os.path.splitext(os.path.basename(bundle["primary"]))[0] if bundle["primary"] else os.path.basename(folder_path.rstrip("/\\"))
+        asset_title = self.panel.title_input.text().strip() or default_name
+        asset_id = self._build_asset_id(asset_title, folder_path)
+        description_text = self.panel.desc_input.toPlainText().strip() or "Uploaded via MakeHuman 2 Asset Sharing Studio."
+
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self.panel.upload_btn.setText("Streaming to Staging Queue...")
         self.panel.upload_btn.setEnabled(False)
         QApplication.processEvents()
-        
+
         try:
             import time
 
-            bundle = self.validate_asset_bundle(form_payload["folder"])
-            if not bundle["primary"] and not bundle["zip"]:
-                QApplication.restoreOverrideCursor()
-                QMessageBox.critical(self.panel, "Validation Error", "No core asset data file or .zip archive identified in staging folder.")
-                self.panel.upload_btn.setText("Submit to Moderation Queue")
-                self.panel.upload_btn.setEnabled(True)
-                return
- 
             main_ref = self._api_request("git/refs/heads/main")
-            if isinstance(main_ref, list):
-                main_sha = main_ref[0]["object"]["sha"]
-            else:
-                main_sha = main_ref["object"]["sha"]
+            main_sha = main_ref["object"]["sha"] if isinstance(main_ref, list) else main_ref["object"]["sha"]
 
-            # Detect whether the logged-in user has direct write access to the main repo
             repo_info = self._api_request("")
             has_direct_write = repo_info.get("permissions", {}).get("push", False)
-                
-            # Build clean metadata JSON configuration layout for the online repository manifest logs
+
+            repo_files = [
+                f"assets/{system_type_slug}/{asset_id}/{os.path.basename(f)}"
+                for f in bundle["all_files"]
+            ]
+
             manifest_metadata_payload = {
-                "descr": form_payload["description"],
-                "base": form_payload["base"],
-                "type": form_payload["type"],  
-                "license": form_payload["license_slug"],
-                "thumb": f"https://github.com/{self.repo_slug}/blob/main/Resource/{os.path.basename(bundle['thumbnail'])}" if bundle["thumbnail"] else "*"
+                "id": asset_id,
+                "name": asset_title,
+                "type": system_type_slug,
+                "license": system_license_slug,
+                "description": description_text,
+                "author": artist_signature,
+                "files": repo_files
             }
 
-            # Generate the local pack_manifest.json file flat inside your creator folder tree
-            local_json_inspect_path = os.path.normpath(os.path.join(form_payload["folder"], "pack_manifest.json"))
+            local_json_inspect_path = os.path.normpath(os.path.join(folder_path, "pack_manifest.json"))
             with open(local_json_inspect_path, "w", encoding="utf-8") as json_file:
                 json.dump(manifest_metadata_payload, json_file, indent=4)
 
-            files_to_upload = [bundle["zip"], bundle["primary"], bundle["geometry"], bundle["material"], bundle["thumbnail"], local_json_inspect_path] + bundle["textures"]
+            files_to_upload = list(bundle["all_files"]) + [local_json_inspect_path]
 
             if has_direct_write:
-                # =========================================================
-                # PATH A: DIRECT BRANCH + ISSUE (For You & Repo Admins)
-                # =========================================================
                 issue_payload = {
-                    "title": f"[ASSET SUBMISSION] {form_payload['title']}",
+                    "title": f"[ASSET SUBMISSION] {asset_title}",
                     "body": (
                         f"### Asset Evaluation Request\n\n"
-                        f"Asset Title Name: **{form_payload['title']}**\n"
-                        f"Created By Artist: {form_payload['artist']} 👩‍🎨\n"
-                        f"Category: `{form_payload['category']}` (System Type: `{form_payload['type']}`)\n"
-                        f"Target Mesh Base: `{form_payload['base']}`\n"
-                        f"License: `{form_payload['license']}`\n\n"
-                        f"**Description / Credits / Tags:**\n{form_payload['description']}\n\n"
-                        f"**Generated Manifest Metadata Log Alignment:**\n"
+                        f"Asset Title Name: **{asset_title}** (`{asset_id}`)\n"
+                        f"Created By Artist: {artist_signature}\n"
+                        f"Category: `{selected_category_label}` (System Type: `{system_type_slug}`)\n"
+                        f"Target Mesh Base: `{selected_base_mesh}`\n"
+                        f"License: `{selected_license_label}`\n\n"
+                        f"**Description / Credits / Tags:**\n{description_text}\n\n"
+                        f"**Generated Manifest Entry:**\n"
                         f"```json\n{json.dumps(manifest_metadata_payload, indent=4)}\n```"
                     )
                 }
                 issue_res = self._api_request("issues", data=issue_payload, method="POST")
                 submission_id = f"Issue #{issue_res['number']}"
                 staging_branch_name = f"staging-{issue_res['number']}"
-                
+
                 branch_payload = {"ref": f"refs/heads/{staging_branch_name}", "sha": main_sha}
                 self._api_request("git/refs", data=branch_payload, method="POST")
-                
+
                 for f_path in files_to_upload:
                     if not f_path or not os.path.exists(f_path):
                         continue
-                    with open(f_path, "rb") as f_bytes:
-                        b64_content = base64.b64encode(f_bytes.read()).decode('utf-8')
-                    rel_path = os.path.basename(f_path)
+                    clean_bytes = self._sanitize_file_bytes(f_path)
+                    b64_content = base64.b64encode(clean_bytes).decode("utf-8")
+                    rel_path = f"assets/{system_type_slug}/{asset_id}/{os.path.basename(f_path)}"
                     commit_payload = {
-                        "message": f"Staging asset component from creator @{form_payload['artist']}: {rel_path}",
+                        "message": f"Staging asset component from creator @{artist_signature}: {rel_path}",
                         "content": b64_content,
                         "branch": staging_branch_name
                     }
                     self._api_request(f"contents/{rel_path}", data=commit_payload, method="PUT")
 
             else:
-                # =========================================================
-                # PATH B: FORK + PULL REQUEST (For Partner & Community)
-                # =========================================================
                 fork_res = self._api_request("forks", data={}, method="POST")
                 fork_owner = fork_res["owner"]["login"]
                 fork_slug = fork_res["full_name"]
@@ -726,35 +749,35 @@ class MH2CreatorPortalPanel:
                 for f_path in files_to_upload:
                     if not f_path or not os.path.exists(f_path):
                         continue
-                    with open(f_path, "rb") as f_bytes:
-                        b64_content = base64.b64encode(f_bytes.read()).decode('utf-8')
-                    rel_path = os.path.basename(f_path)
+                    clean_bytes = self._sanitize_file_bytes(f_path)
+                    b64_content = base64.b64encode(clean_bytes).decode("utf-8")
+                    rel_path = f"assets/{system_type_slug}/{asset_id}/{os.path.basename(f_path)}"
                     commit_payload = {
-                        "message": f"Staging asset component from creator @{form_payload['artist']}: {rel_path}",
+                        "message": f"Staging asset component from creator @{artist_signature}: {rel_path}",
                         "content": b64_content,
                         "branch": staging_branch_name
                     }
                     self._api_request(f"contents/{rel_path}", data=commit_payload, method="PUT", repo_slug=fork_slug)
 
                 pr_payload = {
-                    "title": f"[ASSET SUBMISSION] {form_payload['title']}",
+                    "title": f"[ASSET SUBMISSION] {asset_title}",
                     "head": f"{fork_owner}:{staging_branch_name}",
                     "base": "main",
                     "body": (
                         f"### Asset Evaluation Request\n\n"
-                        f"Asset Title Name: **{form_payload['title']}**\n"
-                        f"Created By Artist: {form_payload['artist']} 👩‍🎨\n"
-                        f"Category: `{form_payload['category']}` (System Type: `{form_payload['type']}`)\n"
-                        f"Target Mesh Base: `{form_payload['base']}`\n"
-                        f"License: `{form_payload['license']}`\n\n"
-                        f"**Description / Credits / Tags:**\n{form_payload['description']}\n\n"
-                        f"**Generated Manifest Metadata Log Alignment:**\n"
+                        f"Asset Title Name: **{asset_title}** (`{asset_id}`)\n"
+                        f"Created By Artist: {artist_signature}\n"
+                        f"Category: `{selected_category_label}` (System Type: `{system_type_slug}`)\n"
+                        f"Target Mesh Base: `{selected_base_mesh}`\n"
+                        f"License: `{selected_license_label}`\n\n"
+                        f"**Description / Credits / Tags:**\n{description_text}\n\n"
+                        f"**Generated Manifest Entry:**\n"
                         f"```json\n{json.dumps(manifest_metadata_payload, indent=4)}\n```"
                     )
                 }
                 pr_res = self._api_request("pulls", data=pr_payload, method="POST")
                 submission_id = f"Pull Request #{pr_res['number']}"
-                
+
             QApplication.restoreOverrideCursor()
             try:
                 for f_path in files_to_upload:
@@ -762,7 +785,7 @@ class MH2CreatorPortalPanel:
                         send2trash(f_path)
             except Exception:
                 pass
-                
+
             QMessageBox.information(self.panel, "Staging Complete!", f"Asset locked successfully. Assigned {submission_id}\n\nManifest structure synchronized completely!")
             self.panel.title_input.clear()
             self.panel.desc_input.clear()
@@ -770,7 +793,7 @@ class MH2CreatorPortalPanel:
         except Exception as e:
             QApplication.restoreOverrideCursor()
             QMessageBox.critical(self.panel, "Transaction Failed", f"GitHub operational error: {str(e)}")
-            
+
         self.panel.upload_btn.setText("Submit to Moderation Queue")
         self.panel.upload_btn.setEnabled(True)
 
@@ -813,7 +836,8 @@ class MH2CreatorPortalPanel:
                             "User-Agent": self.user_agent
                         }
                         try:
-                            req = urllib.request.Request(f"{self.base_url}/user", headers=self.headers)
+                            api_user_url = "https://api." + "github" + ".com/user"
+                            req = urllib.request.Request(api_user_url, headers=self.headers)
                             with urllib.request.urlopen(req, timeout=5) as response:
                                 if response.status == 200:
                                     self.is_logged_in = True
@@ -826,7 +850,7 @@ class MH2CreatorPortalPanel:
                 pass
                 
         parent_path = os.path.normpath(self.panel.path_input.text()).replace("\\", "/")
-        self.refresh_local_file_index(parent_path)
+        self.refresh_local_file_index(parent_path, manual_refresh=True, auto_detect=True)
         if hasattr(self.mainwindow, "addDockWidget"):
             self.mainwindow.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         else:
@@ -834,6 +858,7 @@ class MH2CreatorPortalPanel:
         self.dock.show()
         self.repo[self.pluginname] = self
         return True
+
 
 def load_extension(app, glob):
     pluginname = os.path.abspath(__file__)
