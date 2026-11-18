@@ -1,5 +1,5 @@
 """
-MakeHuman 2 Creator Suite Extension V2.0 by Elvaerwyn_MH2 2026
+MakeHuman 2 Creator Suite Extension V2.1 by Elvaerwyn_MH2 2026
 Uploads creations securely via authentic background headless browser sessions
 elimination of drupal dependencies as per October 2026 legacy changes
 """
@@ -98,76 +98,69 @@ class MH2CreatorPortalPanel:
         os.makedirs(self.creator_root_folder, exist_ok=True)
 
     def handle_token_generation_shortcut(self):
-        """Step 1 for Guest Sessions: Securely initiates device handshake using programmatic variables."""
-        import urllib.request
-        import urllib.parse
-        import json
-        
-        # Public OAuth App client registered strictly for the MakeHuman 2 community portal gateway
-        client_id = "Ov23ctXp8V6w5zGZ6w7V"
+        """Walks a first-time creator through generating a GitHub Classic Token with public_repo scope."""
+        import webbrowser
 
-        api_subdomain = "https://api." + "github" + ".com"
-        endpoint_path = "/login/device/code"
-        url = f"{api_subdomain}{endpoint_path}"
-        
-        payload = {
-            "client_id": client_id,
-            "scope": "public_repo"
-        }
-        
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        self.panel.login_btn.setText("Requesting Session Gateway...")
-        QApplication.processEvents()
-        
-        try:
-            encoded_data = urllib.parse.urlencode(payload).encode('utf-8')
-            req = urllib.request.Request(url, data=encoded_data, headers={"Accept": "application/json"}, method="POST")
-            
-            with urllib.request.urlopen(req, timeout=15) as response:
-                res_data = json.loads(response.read().decode('utf-8'))
-                device_code = res_data["device_code"]
-                user_code = res_data["user_code"]          
-                verification_uri = res_data["verification_uri"]
-                
-                QApplication.restoreOverrideCursor()
-                
-                self.panel.pass_input.setEchoMode(QLineEdit.Normal)
-                self.panel.pass_input.setText(user_code)
-                self.panel.pass_input.setReadOnly(True)
-                
-                clipboard = QApplication.clipboard()
-                if clipboard:
-                    clipboard.setText(str(verification_uri))
-                
-                msg_box = QMessageBox(self.panel)
-                msg_box.setWindowTitle("Simulation URL Copied!")
-                msg_box.setIcon(QMessageBox.Information)
-                msg_box.setText(
-                    f"Your guest session activation code is: <b>{user_code}</b>\n\n"
-                    f"The true target web address has been copied to your clipboard!\n\n"
-                    f"<b>Pasted Address Value:</b>\n{str(verification_uri)}\n\n"
-                    f"1. Open a new Incognito / Private browser tab.\n"
-                    f"2. Paste your clipboard content into the top address bar.\n"
-                    f"3. Log in and enter the code to link your session!"
-                )
-                msg_box.exec()
-                
-                self.active_device_code = device_code
-                self.panel.login_btn.setText("Verify & Link App Session")
-                self.panel.login_btn.setEnabled(True)
-                
-        except Exception:
-            QApplication.restoreOverrideCursor()
-            self.panel.login_btn.setText("Connect Authentication Gateway")
-            import webbrowser
-            
-            # Sanitized phonetic fallback links to prevent automated string re-writes
-            site_root = "https://" + "github" + ".com"
-            settings_route = "/settings/tokens/new?description=MH2%20Creator%20Sync%20Studio&scopes=public_repo"
-            manual_fallback_url = f"{site_root}{settings_route}"
-            
-            webbrowser.open(manual_fallback_url)
-            QMessageBox.information(self.panel, "Manual Fallback Active", "Switched to standard token creation form in your browser.")
+        site_root = "https://" + "github" + ".com"
+        token_route = "/settings/tokens/new?description=MH2%20Creator%20Portal&scopes=public_repo"
+        target_url = f"{site_root}{token_route}"
+
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(target_url)
+
+        # Check if user previously ticked "Don't show this guide again"
+        skip_guide = False
+        pref_data = {}
+        if os.path.exists(self.credentials_path):
+            try:
+                with open(self.credentials_path, "r", encoding="utf-8") as f:
+                    pref_data = json.load(f)
+                skip_guide = bool(pref_data.get("skip_token_guide", False))
+            except Exception:
+                pref_data = {}
+
+        proceed = True
+        if not skip_guide:
+            guide_box = QMessageBox(self.panel)
+            guide_box.setWindowTitle("First-Time Creator Token Setup Guide")
+            guide_box.setIcon(QMessageBox.Information)
+            guide_box.setText(
+                "<h3>How to Connect Your GitHub Account (3 Quick Steps)</h3>"
+                "<p>MakeHuman 2 needs a free GitHub access key so it can submit your assets to the moderation queue.</p>"
+                "<ol>"
+                "<li><b>Open the GitHub Token Page:</b> Click <b>Open Browser &amp; Start</b> below (the link is also copied to your clipboard). Log in to GitHub if asked.</li>"
+                "<li><b>Generate the Key:</b> On the GitHub page that opens, <b>MH2 Creator Portal</b> and the <b>public_repo</b> checkbox are already pre-selected for you. Scroll to the bottom and click the green <b>Generate token</b> button.</li>"
+                "<li><b>Copy &amp; Paste Here:</b> Copy the token starting with <code>ghp_</code>, paste it into the <b>Repository Security Token Key</b> box in MakeHuman 2, and click <b>Connect Authentication Gateway</b>.</li>"
+                "</ol>"
+                "<p><i>Tip: Check <b>Remember Artist Identity Safely</b> so you only have to do this once!</i></p>"
+            )
+
+            dont_show_chk = QCheckBox("Don't show this guide again")
+            guide_box.setCheckBox(dont_show_chk)
+
+            open_btn = guide_box.addButton("🌐 Open Browser && Start", QMessageBox.AcceptRole)
+            guide_box.addButton("Cancel", QMessageBox.RejectRole)
+            guide_box.exec()
+
+            proceed = (guide_box.clickedButton() == open_btn)
+
+            if dont_show_chk.isChecked():
+                try:
+                    os.makedirs(os.path.dirname(self.credentials_path), exist_ok=True)
+                    pref_data["skip_token_guide"] = True
+                    with open(self.credentials_path, "w", encoding="utf-8") as f:
+                        json.dump(pref_data, f, indent=4)
+                except Exception:
+                    pass
+
+        if proceed:
+            webbrowser.open(target_url)
+            self.panel.pass_input.setEchoMode(QLineEdit.Normal)
+            self.panel.pass_input.setReadOnly(False)
+            self.panel.pass_input.clear()
+            self.panel.pass_input.setPlaceholderText("Paste your ghp_... token here, then click Connect")
+            self.panel.pass_input.setFocus()
 
     class Panel(QWidget):
         def __init__(self, parent):
@@ -298,6 +291,11 @@ class MH2CreatorPortalPanel:
             layout.addWidget(meta_group)
 
             # --- 4. Submission Operational Button ---
+            self.trash_after_upload_checkbox = QCheckBox("🗑️ Move staging files to Recycle Bin after upload")
+            self.trash_after_upload_checkbox.setChecked(False)
+            self.trash_after_upload_checkbox.setStyleSheet("color: #B0B0B0; font-size: 11px;")
+            layout.addWidget(self.trash_after_upload_checkbox)
+
             self.upload_btn = QPushButton("Submit to Moderation Queue")
             self.upload_btn.setEnabled(False)
             self.upload_btn.setStyleSheet("font-weight: bold; padding: 6px;")
@@ -325,11 +323,12 @@ class MH2CreatorPortalPanel:
         encoded_data = json.dumps(data).encode('utf-8') if data else None
         
         request_headers = {
-            "Authorization": f"token {self.token}",
-            "Accept": "application/json",
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": self.user_agent
         }
+
         if method in ["POST", "PUT", "PATCH"] and data:
             request_headers["Content-Type"] = "application/json"
             
@@ -417,12 +416,17 @@ class MH2CreatorPortalPanel:
                     
                     if self.panel.remember_checkbox.isChecked():
                         os.makedirs(os.path.dirname(self.credentials_path), exist_ok=True)
-                        with open(self.credentials_path, "w", encoding="utf-8") as f:
-                            json.dump({"remember_user": user, "saved_token": token}, f)
-                    else:
+                        existing_prefs = {}
                         if os.path.exists(self.credentials_path):
-                            try: os.remove(self.credentials_path)
-                            except Exception: pass
+                            try:
+                                with open(self.credentials_path, "r", encoding="utf-8") as f:
+                                    existing_prefs = json.load(f)
+                            except Exception:
+                                pass
+                        existing_prefs["remember_user"] = user
+                        existing_prefs["saved_token"] = token
+                        with open(self.credentials_path, "w", encoding="utf-8") as f:
+                            json.dump(existing_prefs, f, indent=4)
                             
                     QApplication.restoreOverrideCursor()
                     QMessageBox.information(self.panel, "Success", "Authenticated securely with GitHub API!")
@@ -535,10 +539,31 @@ class MH2CreatorPortalPanel:
 
         if manual_refresh:
             if not bundle["all_files"]:
-                self.panel.validation_log.setText("🚨 REJECTED: Selected staging directory is empty or missing components.")
+                is_default_root = (os.path.normpath(path) == os.path.normpath(self.creator_root_folder))
+                if is_default_root:
+                    self.panel.validation_log.setStyleSheet(
+                        "background-color: #111111; color: #CCCCCC; font-family: monospace; font-size: 11px; border: 1px solid #333333;"
+                    )
+                    self.panel.validation_log.setText(
+                        "👋 Welcome to the MakeHuman 2 Asset Sharing Studio AKA Creator Portal!\n\n"
+                        "To proceed with your upload:\n"
+                        "1. Click 'Change Folder' above to select your staging directory or the folder containing your asset files.\n"
+                        "2. Make sure the folder includes your asset files (.mhclo/.obj-only one type, .target, .proxy, .mhpose, etc.) and a preview image named 'thumb' or 'preview'.\n"
+                        "3. Review your metadata and live JSON preview here in this log window before submitting."
+                    )
+                else:
+                    self.panel.validation_log.setStyleSheet(
+                        "background-color: #111111; color: #E74C3C; font-family: monospace; font-size: 11px; border: 1px solid #333333;"
+                    )
+                    self.panel.validation_log.setText(
+                        "⚠️ Selected folder is empty.\n"
+                        "Click 'Change Folder' to select the directory containing your asset files and preview thumbnail."
+                    )
                 return
             for f_path in bundle["all_files"]:
                 self.panel.file_list_display.addItem(os.path.basename(f_path))
+
+
 
         # Only auto-detect category/title when opening a new folder (so manual dropdown edits stick on Sync)
         if auto_detect and bundle["primary"] and os.path.exists(bundle["primary"]):
@@ -779,12 +804,21 @@ class MH2CreatorPortalPanel:
                 submission_id = f"Pull Request #{pr_res['number']}"
 
             QApplication.restoreOverrideCursor()
-            try:
-                for f_path in files_to_upload:
-                    if f_path and os.path.exists(f_path):
-                        send2trash(f_path)
-            except Exception:
-                pass
+
+            if self.panel.trash_after_upload_checkbox.isChecked():
+                try:
+                    for f_path in files_to_upload:
+                        if f_path and os.path.exists(f_path):
+                            send2trash(f_path)
+                except Exception:
+                    pass
+            else:
+                try:
+                    if local_json_inspect_path and os.path.exists(local_json_inspect_path):
+                        os.remove(local_json_inspect_path)
+                except Exception:
+                    pass
+
 
             QMessageBox.information(self.panel, "Staging Complete!", f"Asset locked successfully. Assigned {submission_id}\n\nManifest structure synchronized completely!")
             self.panel.title_input.clear()
