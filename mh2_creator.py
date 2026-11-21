@@ -440,7 +440,9 @@ class MH2CreatorPortalPanel:
         self.panel.login_btn.setText("Connect Authentication Gateway")
 
     def browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self.panel, "Select Asset Bundle Folder", self.creator_root_folder)
+        self.mh_glob.openGLBlock = True
+        folder = QFileDialog.getExistingDirectory(None, "Select Asset Bundle Folder", self.creator_root_folder)
+        self.mh_glob.openGLBlock = False
         if not folder:
             return
         folder = folder.replace("\\", "/")
